@@ -1,1 +1,1409 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>픽셀 게임</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #2a2a2a;
+            overflow: hidden;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 캔버스 크기 설정
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+
+        // 떨어지는 픽셀 배열
+        const pixels = [];
+        
+        // 캐릭터 위치 (그리드 좌표)
+        let playerRow = 3; // 중앙 위치
+        let playerCol = 3;
+        
+        // 애니메이션 변수
+        let isAnimating = false;
+        let animProgress = 0; // 0~1
+        let animStartRow = 3;
+        let animStartCol = 3;
+        let animEndRow = 3;
+        let animEndCol = 3;
+        
+        // 점수 카운터
+        let score = 0;
+        let lastScoreTime = Date.now();
+        let hasStartedMoving = false; // 플레이어가 움직였는지 확인
+        
+        // 마우스 위치
+        let mouseX = 0;
+        let mouseY = 0;
+        
+        // X 위치 상태
+        let savedXPos = { x: 0, y: -(75 + 12.5) }; // 초기 위치
+        
+        // 고블린 관련
+        let goblins = []; // 고블린 배열
+        let playerHealth = 5;
+        let lastDamageTime = Date.now();
+        let lastGoblinSpawnTime = Date.now();
+        let goblinSpawnInterval = 10000; // 스폰 간격 (초기 10초)
+        let gameStartTime = Date.now(); // 게임 시작 시간
+        
+        // 체력 바 쪼개지는 애니메이션
+        let healthBreakingAnim = null; // { index: 체력바 인덱스, progress: 0~1 }
+        
+        // 플레이어 피격 효과
+        let playerIsHit = false;
+        let playerHitStartTime = 0;
+        let playerHitOffset = { x: 0, y: 0 };
+        
+        // 플레이어 공격 상태
+        let playerAttackAnim = null; // { progress: 0~1 }
+        let lastPlayerAttackTime = 0;
+        
+        // 고블린 사망 파티클
+        let goblinParticles = [];
+        
+        
+        // 고블린 클래스
+        class Goblin {
+            constructor() {
+                this.row = 1;
+                this.col = 1;
+                this.health = 3; // 고블린 체력
+                this.lastMoveTime = Date.now();
+                this.isAttacking = false;
+                this.attackStartTime = 0;
+                
+                // 애니메이션 변수
+                this.isAnimating = false;
+                this.animProgress = 0;
+                this.animStartRow = 1;
+                this.animStartCol = 1;
+                this.animEndRow = 1;
+                this.animEndCol = 1;
+                
+                // 원래 위치 저장
+                this.homeRow = 1;
+                this.homeCol = 1;
+                this.isReturning = false;
+                this.isAttackingPlayer = false; // 플레이어에게 돌진 중인지
+                
+                // 공격 관련
+                this.attackAngle = 0;
+                this.lastEnteredRangeTime = 0; // 8칸 범위에 들어온 시간
+                this.isInRange = false; // 8칸 범위 안에 있는지
+                
+                // 피격 효과
+                this.isHit = false;
+                this.hitStartTime = 0;
+                this.hitOffset = { x: 0, y: 0 };
+                
+                // 고정된 울퉁불퉁 패턴 생성
+                this.generatePattern();
+            }
+            
+            generatePattern() {
+                // 고블린마다 고유한 패턴을 미리 생성
+                const baseSize = 30;
+                const numPoints = 20;
+                this.pattern = [];
+                this.extraOffsets = []; // 체력이 낮을 때 사용할 추가 오프셋
+                
+                const points = [
+                    { x: 0, y: -baseSize },
+                    { x: -baseSize * 0.866, y: baseSize * 0.5 },
+                    { x: baseSize * 0.866, y: baseSize * 0.5 }
+                ];
+                
+                for (let i = 0; i < numPoints; i++) {
+                    const sideIndex = Math.floor(i / (numPoints / 3));
+                    const nextSideIndex = (sideIndex + 1) % 3;
+                    const t = (i % (numPoints / 3)) / (numPoints / 3);
+                    
+                    const p1 = points[sideIndex];
+                    const p2 = points[nextSideIndex];
+                    
+                    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                    const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+                    
+                    // 고정된 울퉁불퉁 패턴
+                    const offset = Math.random() < 0.5 ? (Math.random() - 0.5) * 4 : 0;
+                    const perpAngle = angle + Math.PI / 2;
+                    
+                    const x = p1.x + Math.cos(angle) * dist * t + Math.cos(perpAngle) * offset;
+                    const y = p1.y + Math.sin(angle) * dist * t + Math.sin(perpAngle) * offset;
+                    
+                    this.pattern.push({ x, y });
+                    
+                    // 추가 오프셋도 랜덤하게 미리 저장
+                    this.extraOffsets.push({
+                        angle: Math.random() * Math.PI * 2,
+                        dist: Math.random() * 1
+                    });
+                }
+            }
+            
+            update() {
+                const currentTime = Date.now();
+                
+                // 애니메이션 업데이트
+                if (this.isAnimating) {
+                    const animSpeed = 1 / (60 * 0.2);
+                    this.animProgress += animSpeed;
+                    if (this.animProgress >= 1) {
+                        this.animProgress = 1;
+                        this.isAnimating = false;
+                        
+                        // 공격 후 원래 자리로 복귀
+                        if (this.isReturning) {
+                            // 실제 위치 업데이트
+                            this.row = this.homeRow;
+                            this.col = this.homeCol;
+                            
+                            this.isReturning = false;
+                            this.isAttacking = false;
+                            this.isAttackingPlayer = false;
+                        }
+                        // 플레이어에게 돌진 완료 후 원래 자리로 복귀
+                        else if (this.isAttackingPlayer) {
+                            this.returnHome();
+                        }
+                    }
+                }
+                
+                // 공격 중이 아니고, 이동 중이 아닐 때만
+                if (!this.isAttacking && !this.isAnimating) {
+                    const distance = this.distanceToPlayer();
+                    
+                    // 플레이어 주변 8칸 밖에 있으면 1.5초마다 추적
+                    if (distance > 1 && currentTime - this.lastMoveTime >= 1500) {
+                        this.moveTowardsPlayer();
+                        this.lastMoveTime = currentTime;
+                    }
+                }
+                
+                // 공격 회전 애니메이션 업데이트
+                if (this.isAttacking) {
+                    this.attackAngle += 0.3;
+                }
+                
+                // 피격 효과 업데이트
+                if (this.isHit) {
+                    const hitDuration = 150; // 0.15초
+                    const elapsed = currentTime - this.hitStartTime;
+                    
+                    if (elapsed < hitDuration) {
+                        // 흔들림 효과
+                        const shakeAmount = 3;
+                        this.hitOffset.x = (Math.random() - 0.5) * shakeAmount;
+                        this.hitOffset.y = (Math.random() - 0.5) * shakeAmount;
+                    } else {
+                        this.isHit = false;
+                        this.hitOffset.x = 0;
+                        this.hitOffset.y = 0;
+                    }
+                }
+            }
+            
+            takeDamage(damage) {
+                const wasAlive = this.health > 0;
+                this.health -= damage;
+                this.isHit = true;
+                this.hitStartTime = Date.now();
+                
+                // 공격 쿨타임 초기화
+                this.lastEnteredRangeTime = Date.now();
+                // 이동 쿨타임도 초기화
+                this.lastMoveTime = Date.now();
+                
+                // 체력이 0 이하가 되면 죽음 효과
+                if (this.health <= 0) {
+                    this.health = 0;
+                    // 죽을 때만 파티클 생성 (처음으로 죽는 경우)
+                    if (wasAlive) {
+                        createGoblinParticles(this);
+                    }
+                }
+            }
+            
+            moveTowardsPlayer() {
+                // 플레이어에게 가까워지는 방향으로 이동
+                const dx = playerCol - this.col;
+                const dy = playerRow - this.row;
+                
+                // 더 큰 차이 방향으로 먼저 이동
+                let newCol = this.col;
+                let newRow = this.row;
+                
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    newCol += dx > 0 ? 1 : -1;
+                } else {
+                    newRow += dy > 0 ? 1 : -1;
+                }
+                
+                // 맵 경계 체크 및 다른 고블린과 겹치지 않게 체크
+                if (newRow >= 0 && newRow < 7 && newCol >= 0 && newCol < 7) {
+                    // 다른 고블린들과 겹치지 않는지 확인
+                    let canMove = true;
+                    for (const otherGoblin of goblins) {
+                        if (otherGoblin !== this && otherGoblin.health > 0) {
+                            // 실제 위치 체크
+                            if (otherGoblin.row === newRow && otherGoblin.col === newCol) {
+                                canMove = false;
+                                break;
+                            }
+                            
+                            // 애니메이션 중이면 시작 위치와 끝 위치도 체크
+                            if (otherGoblin.isAnimating) {
+                                if ((otherGoblin.animStartRow === newRow && otherGoblin.animStartCol === newCol) ||
+                                    (otherGoblin.animEndRow === newRow && otherGoblin.animEndCol === newCol)) {
+                                    canMove = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 플레이어와도 겹치지 않아야 함
+                    if (newRow === playerRow && newCol === playerCol) {
+                        canMove = false;
+                    }
+                    
+                    if (canMove) {
+                        // 애니메이션 시작
+                        this.isAnimating = true;
+                        this.animProgress = 0;
+                        this.animStartRow = this.row;
+                        this.animStartCol = this.col;
+                        
+                        this.row = newRow;
+                        this.col = newCol;
+                        
+                        this.animEndRow = newRow;
+                        this.animEndCol = newCol;
+                    }
+                }
+            }
+            
+            distanceToPlayer() {
+                // 체브셰프 거리 (8방향 공격 가능)
+                return Math.max(Math.abs(this.row - playerRow), Math.abs(this.col - playerCol));
+            }
+            
+            startAttack() {
+                // 원래 위치 저장
+                this.homeRow = this.row;
+                this.homeCol = this.col;
+                
+                // 공격 시작 - 플레이어에게 돌진
+                this.isAttacking = true;
+                this.isAttackingPlayer = true;
+                this.attackStartTime = Date.now();
+                this.attackAngle = 0;
+                
+                // 애니메이션 시작
+                this.isAnimating = true;
+                this.animProgress = 0;
+                this.animStartRow = this.row;
+                this.animStartCol = this.col;
+                
+                // 플레이어 위치로 이동
+                this.animEndRow = playerRow;
+                this.animEndCol = playerCol;
+            }
+            
+            returnHome() {
+                // 원래 자리로 돌아가기
+                this.isReturning = true;
+                this.isAnimating = true;
+                this.animProgress = 0;
+                
+                // 현재 애니메이션 위치가 실제 위치
+                // 홈 위치로 복귀
+                this.animStartRow = this.animEndRow;
+                this.animStartCol = this.animEndCol;
+                
+                this.animEndRow = this.homeRow;
+                this.animEndCol = this.homeCol;
+            }
+        }
+        
+        // 고블린 파티클 클래스
+        class GoblinParticle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = 8 + Math.random() * 8; // 8~16px
+                this.speedY = 0.5 + Math.random() * 1.5; // 아래로 떨어지는 속도
+                this.speedX = (Math.random() - 0.5) * 2; // 좌우로 퍼지는 속도
+                this.rotation = 0;
+                this.rotationSpeed = (Math.random() - 0.5) * 0.1;
+                
+                // 울퉁불퉁한 패턴 생성
+                this.generatePattern();
+            }
+            
+            generatePattern() {
+                // 4개 모서리에 대한 오프셋 생성
+                const variation = 3;
+                this.corners = [
+                    { x: -this.size / 2 + (Math.random() - 0.5) * variation, 
+                      y: -this.size / 2 + (Math.random() - 0.5) * variation },
+                    { x: this.size / 2 + (Math.random() - 0.5) * variation, 
+                      y: -this.size / 2 + (Math.random() - 0.5) * variation },
+                    { x: this.size / 2 + (Math.random() - 0.5) * variation, 
+                      y: this.size / 2 + (Math.random() - 0.5) * variation },
+                    { x: -this.size / 2 + (Math.random() - 0.5) * variation, 
+                      y: this.size / 2 + (Math.random() - 0.5) * variation }
+                ];
+            }
+            
+            update() {
+                this.y += this.speedY;
+                this.x += this.speedX;
+                this.rotation += this.rotationSpeed;
+            }
+            
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.fillStyle = 'rgba(102, 255, 102, 0.75)'; // 고블린 색상, 75% 투명도
+                
+                // 울퉁불퉁한 사각형 그리기
+                ctx.beginPath();
+                ctx.moveTo(this.corners[0].x, this.corners[0].y);
+                ctx.lineTo(this.corners[1].x, this.corners[1].y);
+                ctx.lineTo(this.corners[2].x, this.corners[2].y);
+                ctx.lineTo(this.corners[3].x, this.corners[3].y);
+                ctx.closePath();
+                ctx.fill();
+                
+                ctx.restore();
+            }
+            
+            isOffScreen() {
+                return this.y > canvas.height;
+            }
+        }
+        
+        // 고블린 사망 파티클 생성
+        function createGoblinParticles(goblin) {
+            const gridSize = 7;
+            const cellSize = 75;
+            const spacing = 12.5;
+            const totalSize = gridSize * cellSize + (gridSize - 1) * spacing;
+            const startX = (canvas.width - totalSize) / 2;
+            const startY = (canvas.height - totalSize) / 2;
+            
+            const centerX = startX + goblin.col * (cellSize + spacing) + cellSize / 2;
+            const centerY = startY + goblin.row * (cellSize + spacing) + cellSize / 2;
+            
+            // 여러 개의 파티클 생성 (10개에서 15% 감소)
+            for (let i = 0; i < 8; i++) {
+                const particle = new GoblinParticle(centerX, centerY);
+                goblinParticles.push(particle);
+            }
+        }
+        
+        // 고블린 스폰 함수 (7x7 그리드 태두리에서만)
+        function spawnGoblin() {
+            // 7x7 그리드의 가장자리 위치 (상, 하, 좌, 우)
+            const positions = [];
+            
+            // 상단
+            for (let i = 0; i < 7; i++) {
+                positions.push({ row: 0, col: i });
+            }
+            // 하단
+            for (let i = 0; i < 7; i++) {
+                positions.push({ row: 6, col: i });
+            }
+            // 왼쪽
+            for (let i = 1; i < 6; i++) {
+                positions.push({ row: i, col: 0 });
+            }
+            // 오른쪽
+            for (let i = 1; i < 6; i++) {
+                positions.push({ row: i, col: 6 });
+            }
+            
+            // 겹치지 않는 위치 찾기
+            const occupiedPositions = new Set();
+            
+            // 기존 고블린 위치 저장 (실제 위치 + 애니메이션 위치)
+            for (const goblin of goblins) {
+                if (goblin.health > 0) {
+                    occupiedPositions.add(`${goblin.row},${goblin.col}`);
+                    
+                    // 애니메이션 중이면 시작 위치와 끝 위치도 추가
+                    if (goblin.isAnimating) {
+                        occupiedPositions.add(`${goblin.animStartRow},${goblin.animStartCol}`);
+                        occupiedPositions.add(`${goblin.animEndRow},${goblin.animEndCol}`);
+                    }
+                }
+            }
+            
+            // 플레이어 위치도 제외
+            occupiedPositions.add(`${playerRow},${playerCol}`);
+            
+            // 사용 가능한 위치만 필터링
+            const availablePositions = positions.filter(pos => 
+                !occupiedPositions.has(`${pos.row},${pos.col}`)
+            );
+            
+            if (availablePositions.length === 0) return; // 스폰할 공간이 없으면 생성하지 않음
+            
+            // 랜덤 위치 선택
+            const randomPos = availablePositions[Math.floor(Math.random() * availablePositions.length)];
+            
+            // 고블린 생성
+            const newGoblin = new Goblin();
+            newGoblin.row = randomPos.row;
+            newGoblin.col = randomPos.col;
+            newGoblin.animStartRow = randomPos.row;
+            newGoblin.animStartCol = randomPos.col;
+            
+            // 배열에 추가
+            goblins.push(newGoblin);
+        }
+        
+        // 픽셀 클래스
+        class Pixel {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = -20;
+                this.size = 8 + Math.random() * 8; // 8~16px 크기
+                this.speed = 0.5 + Math.random() * 1.5; // 속도 랜덤
+                this.rotation = 0; // 회전 각도
+                this.rotationSpeed = (Math.random() - 0.5) * 0.1; // 회전 속도
+                // 고정된 테두리 좌표 생성
+                this.path = this.generateFixedPath();
+            }
+
+            generateFixedPath() {
+                const path = [];
+                const edgeVariation = 2;
+                const halfSize = this.size / 2;
+                
+                // 위쪽 변 (왼쪽에서 오른쪽으로)
+                for (let i = -halfSize; i <= halfSize; i += 4) {
+                    path.push({ x: i, y: -halfSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0) });
+                }
+                
+                // 오른쪽 변 (위에서 아래로)
+                for (let i = -halfSize + 4; i < halfSize; i += 4) {
+                    path.push({ x: halfSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0), y: i });
+                }
+                
+                // 아래쪽 변 (오른쪽에서 왼쪽으로)
+                for (let i = halfSize; i >= -halfSize; i -= 4) {
+                    path.push({ x: i, y: halfSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0) });
+                }
+                
+                // 왼쪽 변 (아래에서 위로, 끝점 제외)
+                for (let i = halfSize - 4; i > -halfSize; i -= 4) {
+                    path.push({ x: -halfSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0), y: i });
+                }
+                
+                return path;
+            }
+
+            update() {
+                this.y += this.speed;
+                this.rotation += this.rotationSpeed; // 회전
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x + this.size / 2, this.y + this.size / 2); // 중심점으로 이동
+                ctx.rotate(this.rotation); // 회전
+                ctx.fillStyle = '#6a6a6a'; // 더 연한 회색
+                
+                // 고정된 울퉁불퉁한 테두리로 그리기
+                ctx.beginPath();
+                if (this.path.length > 0) {
+                    ctx.moveTo(this.path[0].x, this.path[0].y);
+                    for (let i = 1; i < this.path.length; i++) {
+                        ctx.lineTo(this.path[i].x, this.path[i].y);
+                    }
+                }
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+            }
+
+            isOffScreen() {
+                return this.y > canvas.height;
+            }
+        }
+
+        // 새로운 픽셀 생성 함수
+        function createPixel() {
+            if (Math.random() < 0.0075) { // 0.75% 확률로 픽셀 생성
+                pixels.push(new Pixel());
+            }
+        }
+
+        // 고정된 그리드 패턴 생성
+        let gridPaths = [];
+        function generateGridPatterns() {
+            const gridSize = 7;
+            const cellSize = 75;
+            const edgeVariation = 3;
+            
+            for (let row = 0; row < gridSize; row++) {
+                for (let col = 0; col < gridSize; col++) {
+                    const path = [];
+                    
+                    // 위쪽 변
+                    for (let i = 0; i <= cellSize; i += 10) {
+                        path.push({ x: i, y: Math.random() < 0.3 ? Math.random() * edgeVariation : 0 });
+                    }
+                    
+                    // 오른쪽 변
+                    for (let i = 10; i < cellSize; i += 10) {
+                        path.push({ x: cellSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0), y: i });
+                    }
+                    
+                    // 아래쪽 변
+                    for (let i = cellSize; i >= 0; i -= 10) {
+                        path.push({ x: i, y: cellSize + (Math.random() < 0.3 ? Math.random() * edgeVariation : 0) });
+                    }
+                    
+                    // 왼쪽 변
+                    for (let i = cellSize - 10; i > 0; i -= 10) {
+                        path.push({ x: Math.random() < 0.3 ? Math.random() * edgeVariation : 0, y: i });
+                    }
+                    
+                    gridPaths.push(path);
+                }
+            }
+        }
+
+        // 7x7 그리드 그리기
+        function drawGrid() {
+            const gridSize = 7; // 7x7 그리드
+            const cellSize = 75; // 각 셀 크기
+            const spacing = 12.5; // 셀 간격
+            const totalSize = gridSize * cellSize + (gridSize - 1) * spacing;
+            
+            // 중앙 위치 계산
+            const startX = (canvas.width - totalSize) / 2;
+            const startY = (canvas.height - totalSize) / 2;
+            
+            ctx.fillStyle = '#7a7a7a'; // 배경보다 밝은 회색
+            
+            for (let row = 0; row < gridSize; row++) {
+                for (let col = 0; col < gridSize; col++) {
+                    const x = startX + col * (cellSize + spacing);
+                    const y = startY + row * (cellSize + spacing);
+                    const pathIndex = row * gridSize + col;
+                    
+                    // 고정된 울퉁불퉁한 테두리로 그리기
+                    ctx.beginPath();
+                    if (gridPaths[pathIndex] && gridPaths[pathIndex].length > 0) {
+                        ctx.moveTo(x + gridPaths[pathIndex][0].x, y + gridPaths[pathIndex][0].y);
+                        for (let i = 1; i < gridPaths[pathIndex].length; i++) {
+                            ctx.lineTo(x + gridPaths[pathIndex][i].x, y + gridPaths[pathIndex][i].y);
+                        }
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+        }
+
+        // 고정된 캐릭터 패턴 생성
+        let playerPath = null;
+        function generatePlayerPattern() {
+            const radius = 30; // 원의 반지름
+            const numPoints = 30; // 원의 점 개수
+            const variation = 6; // 울퉁불퉁한 정도
+            
+            const path = [];
+            for (let i = 0; i < numPoints; i++) {
+                const angle = (i / numPoints) * Math.PI * 2;
+                const offset = Math.random() < 0.4 ? (Math.random() - 0.5) * variation : 0;
+                const r = radius + offset;
+                path.push({
+                    x: r * Math.cos(angle),
+                    y: r * Math.sin(angle)
+                });
+            }
+            return path;
+        }
+
+        // 캐릭터 그리기
+        function drawPlayer() {
+            const gridSize = 7;
+            const cellSize = 75;
+            const spacing = 12.5;
+            const totalSize = gridSize * cellSize + (gridSize - 1) * spacing;
+            
+            // 중앙 위치 계산
+            const startX = (canvas.width - totalSize) / 2;
+            const startY = (canvas.height - totalSize) / 2;
+            
+            // 애니메이션 위치 계산
+            let currentRow, currentCol;
+            if (isAnimating) {
+                // 애니메이션 중: 이동 방향으로 살짝 오버하고 돌아오는 효과
+                // 0 -> 1.15 -> 1 (오버슈팅 효과)
+                let bounceProgress;
+                if (animProgress < 0.5) {
+                    // 처음 50%: 0에서 1.15까지
+                    bounceProgress = animProgress * 2 * 1.15;
+                } else {
+                    // 나머지 50%: 1.15에서 1로 복귀
+                    bounceProgress = 1.15 - (animProgress - 0.5) * 2 * 0.15;
+                }
+                
+                currentRow = animStartRow + (animEndRow - animStartRow) * bounceProgress;
+                currentCol = animStartCol + (animEndCol - animStartCol) * bounceProgress;
+            } else {
+                currentRow = playerRow;
+                currentCol = playerCol;
+            }
+            
+            // 캐릭터 위치 계산
+            const centerX = startX + currentCol * (cellSize + spacing) + cellSize / 2 + playerHitOffset.x;
+            const centerY = startY + currentRow * (cellSize + spacing) + cellSize / 2 + playerHitOffset.y;
+            
+            // 마우스를 향한 각도 계산 (4방향으로 반올림)
+            const dx = mouseX - centerX;
+            const dy = mouseY - centerY;
+            let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+            
+            // 0~360도로 변환
+            if (angle < 0) angle += 360;
+            
+            // 4방향으로 반올림 (시계방향으로 1칸 이동: 오른쪽=90, 아래=180, 왼쪽=270, 위=0)
+            let direction;
+            if (angle >= 315 || angle < 45) {
+                direction = 90; // 마우스가 오른쪽이면 시계방향으로 아래
+            } else if (angle >= 45 && angle < 135) {
+                direction = 180; // 마우스가 아래면 시계방향으로 왼쪽
+            } else if (angle >= 135 && angle < 225) {
+                direction = 270; // 마우스가 왼쪽이면 시계방향으로 위
+            } else {
+                direction = 0; // 마우스가 위면 시계방향으로 오른쪽
+            }
+            
+            ctx.fillStyle = playerIsHit ? '#aa6a6a' : '#6a6a6a'; // 피격 시 붉게
+            
+            // 울퉁불퉁한 원 그리기 (회전 적용)
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(direction * Math.PI / 180);
+            
+            ctx.beginPath();
+            if (playerPath && playerPath.length > 0) {
+                ctx.moveTo(playerPath[0].x, playerPath[0].y);
+                for (let i = 1; i < playerPath.length; i++) {
+                    ctx.lineTo(playerPath[i].x, playerPath[i].y);
+                }
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+            // 플레이어가 보고 있는 방향의 1칸에 빨간 X 그리기
+            ctx.lineWidth = 10;
+            ctx.lineCap = 'round';
+            
+            // 회전된 좌표계에서 플레이어가 보는 방향은 항상 위
+            // 회전된 좌표계에서 목표 위치 (위쪽 = -y 방향)
+            const localX = 0;
+            const localY = -(cellSize + spacing);
+            
+            // 회전을 고려하여 월드 좌표로 변환
+            const cos = Math.cos(direction * Math.PI / 180);
+            const sin = Math.sin(direction * Math.PI / 180);
+            const worldOffsetX = localX * cos - localY * sin;
+            const worldOffsetY = localX * sin + localY * cos;
+            
+            const targetWorldX = centerX + worldOffsetX;
+            const targetWorldY = centerY + worldOffsetY;
+            
+            // 맵 경계 체크
+            const targetCol = Math.floor((targetWorldX - startX) / (cellSize + spacing));
+            const targetRow = Math.floor((targetWorldY - startY) / (cellSize + spacing));
+            
+            // 맵 안에 있으면 위치 업데이트, 밖이면 이전 위치 유지
+            if (targetRow >= 0 && targetRow < 7 && targetCol >= 0 && targetCol < 7) {
+                savedXPos.x = localX;
+                savedXPos.y = localY;
+            }
+            
+            // X 그리기 (크기 0.75배)
+            const xSize = cellSize / 4 * 0.75;
+            
+            // 충전 상태 확인 (현재 시간 기준으로 1초 이내면 충전 중)
+            const currentTime = Date.now();
+            const timeSinceLastAttack = currentTime - lastPlayerAttackTime;
+            const isRecharging = timeSinceLastAttack < 1000;
+            
+            if (isRecharging) {
+                // 충전 중: 플레이어 색과 같은 색(회색)
+                ctx.strokeStyle = 'rgba(106, 106, 106, 0.7)'; // 플레이어 색상 #6a6a6a
+                ctx.beginPath();
+                ctx.moveTo(savedXPos.x - xSize, savedXPos.y - xSize);
+                ctx.lineTo(savedXPos.x + xSize, savedXPos.y + xSize);
+                ctx.moveTo(savedXPos.x + xSize, savedXPos.y - xSize);
+                ctx.lineTo(savedXPos.x - xSize, savedXPos.y + xSize);
+                ctx.stroke();
+            } else {
+                // 충전 완료: 빨간색
+                ctx.strokeStyle = 'rgba(220, 80, 80, 0.7)';
+                ctx.beginPath();
+                ctx.moveTo(savedXPos.x - xSize, savedXPos.y - xSize);
+                ctx.lineTo(savedXPos.x + xSize, savedXPos.y + xSize);
+                ctx.moveTo(savedXPos.x + xSize, savedXPos.y - xSize);
+                ctx.lineTo(savedXPos.x - xSize, savedXPos.y + xSize);
+                ctx.stroke();
+            }
+            
+            ctx.restore();
+        }
+        
+        // 고정된 고블린 패턴 생성
+        let goblinPath = null;
+        function generateGoblinPattern() {
+            const size = 30; // 조금 더 크게
+            const variation = 4; // 울퉁불퉁한 정도
+            const numPoints = 20; // 삼각형 점 개수
+            
+            // 정삼각형의 3개 점
+            const points = [
+                { x: 0, y: -size, angle: -Math.PI / 2 },
+                { x: -size * 0.866, y: size * 0.5, angle: Math.PI / 6 },
+                { x: size * 0.866, y: size * 0.5, angle: Math.PI / 6 + Math.PI * 2 / 3 }
+            ];
+            
+            const path = [];
+            for (let i = 0; i < numPoints; i++) {
+                const sideIndex = Math.floor(i / (numPoints / 3));
+                const nextSideIndex = (sideIndex + 1) % 3;
+                const t = (i % (numPoints / 3)) / (numPoints / 3);
+                
+                const p1 = points[sideIndex];
+                const p2 = points[nextSideIndex];
+                
+                const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+                const dist = Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+                
+                const offset = Math.random() < 0.5 ? (Math.random() - 0.5) * variation : 0;
+                const perpAngle = angle + Math.PI / 2;
+                
+                const x = p1.x + Math.cos(angle) * dist * t + Math.cos(perpAngle) * offset;
+                const y = p1.y + Math.sin(angle) * dist * t + Math.sin(perpAngle) * offset;
+                
+                path.push({ x, y });
+            }
+            return path;
+        }
+        
+        // 체력 바 그리기
+        function drawHealthBar() {
+            if (playerHealth <= 0) return;
+            
+            const healthBarSize = 75 * 0.4; // 칸의 40%
+            const spacing = 3; // 체력 바 간격
+            const startX = 20;
+            const startY = 20;
+            const maxHealth = 5;
+            
+            ctx.fillStyle = '#7a7a7a'; // 그리드와 같은 색깔
+            
+            for (let i = 0; i < maxHealth; i++) {
+                const x = startX + i * (healthBarSize + spacing);
+                const y = startY;
+                
+                // 쪼개지는 애니메이션 중인 체력 바인지 확인
+                const isBreaking = healthBreakingAnim && healthBreakingAnim.index === i;
+                
+                // 현재 체력을 초과하고 애니메이션 중이 아닌 체력 바는 그리지 않음
+                if (i >= playerHealth && !isBreaking) continue;
+                
+                // 그리드 패턴을 healthBarSize에 맞게 그리기
+                if (gridPaths && gridPaths.length > 0) {
+                    const gridPath = gridPaths[0]; // 첫 번째 그리드 패턴 사용
+                    const scale = healthBarSize / 75; // healthBarSize에 맞는 스케일
+                    
+                    if (isBreaking) {
+                        // 쪼개지는 애니메이션: progress에 따라 점점 왼쪽에서 사라짐
+                        const clipWidth = healthBarSize * (1 - healthBreakingAnim.progress);
+                        
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.rect(x, y, clipWidth, healthBarSize);
+                        ctx.clip();
+                    }
+                    
+                    ctx.beginPath();
+                    if (gridPath && gridPath.length > 0) {
+                        ctx.moveTo(x + gridPath[0].x * scale, y + gridPath[0].y * scale);
+                        for (let j = 1; j < gridPath.length; j++) {
+                            ctx.lineTo(x + gridPath[j].x * scale, y + gridPath[j].y * scale);
+                        }
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    
+                    if (isBreaking) {
+                        ctx.restore();
+                    }
+                }
+            }
+        }
+        
+        // 고블린 그리기
+        function drawGoblin(goblin) {
+            if (!goblin || goblin.health <= 0) return;
+            
+            const gridSize = 7;
+            const cellSize = 75;
+            const spacing = 12.5;
+            const totalSize = gridSize * cellSize + (gridSize - 1) * spacing;
+            
+            const startX = (canvas.width - totalSize) / 2;
+            const startY = (canvas.height - totalSize) / 2;
+            
+            // 애니메이션 위치 계산
+            let currentRow, currentCol;
+            if (goblin.isAnimating) {
+                // 공격 중일 때는 단순 이동, 일반 이동이나 복귀일 때는 bounce 효과
+                let progress;
+                if (goblin.isAttackingPlayer || goblin.isReturning) {
+                    // 공격/복귀 중에는 단순 선형 이동
+                    progress = goblin.animProgress;
+                } else {
+                    // 일반 이동에는 bounce 효과
+                    progress = goblin.animProgress < 0.5 
+                        ? goblin.animProgress * 2 * 1.15
+                        : 1.15 - (goblin.animProgress - 0.5) * 2 * 0.15;
+                }
+                
+                currentRow = goblin.animStartRow + (goblin.animEndRow - goblin.animStartRow) * progress;
+                currentCol = goblin.animStartCol + (goblin.animEndCol - goblin.animStartCol) * progress;
+            } else {
+                currentRow = goblin.row;
+                currentCol = goblin.col;
+            }
+            
+            const centerX = startX + currentCol * (cellSize + spacing) + cellSize / 2 + goblin.hitOffset.x;
+            const centerY = startY + currentRow * (cellSize + spacing) + cellSize / 2 + 5 + goblin.hitOffset.y; // 살짝 내리기
+            
+            // 회전 적용
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            
+            // 공격 중이면 회전
+            if (goblin.isAttacking) {
+                ctx.rotate(goblin.attackAngle);
+            }
+            
+            // 피격 중이면 붉게
+            ctx.fillStyle = goblin.isHit ? '#ff6666' : '#66ff66';
+            
+            // 체력에 따라 크기와 울퉁불퉁한 효과 조절
+            const maxHealth = 3;
+            const healthRatio = goblin.health / maxHealth; // 1.0 (최대) ~ 0.33 (최소)
+            
+            // 크기: 체력이 낮을수록 작아짐 (1.0 -> 0.7)
+            const scale = 0.7 + healthRatio * 0.3;
+            
+            // 추가 울퉁불퉁한 정도: 체력이 낮을수록 강해짐
+            const extraVariation = (maxHealth - goblin.health) * 2;
+            
+            // 스케일 적용
+            ctx.scale(scale, scale);
+            
+            // 고정된 패턴에 추가 변형 적용
+            ctx.beginPath();
+            if (goblin.pattern && goblin.pattern.length > 0) {
+                for (let i = 0; i < goblin.pattern.length; i++) {
+                    const p = goblin.pattern[i];
+                    const offset = goblin.extraOffsets[i];
+                    
+                    // 추가 울퉁불퉁 효과 적용
+                    const extraX = Math.cos(offset.angle) * offset.dist * extraVariation;
+                    const extraY = Math.sin(offset.angle) * offset.dist * extraVariation;
+                    
+                    const x = p.x + extraX;
+                    const y = p.y + extraY;
+                    
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+            }
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.restore();
+        }
+        
+        // 고정된 숫자 텍스트 패턴
+        let scorePattern = null;
+        function generateScorePattern() {
+            const x = canvas.width / 2;
+            const y = 20;
+            const variations = [];
+            
+            // 각진 울퉁불퉁한 패턴 생성 (픽셀 단위로 딱딱하게)
+            for (let i = 0; i < 25; i++) {
+                variations.push({
+                    x: Math.floor((Math.random() - 0.5) * 5), // 픽셀 단위 (숫자용)
+                    y: Math.floor((Math.random() - 0.5) * 5)  // 픽셀 단위 (숫자용)
+                });
+            }
+            return variations;
+        }
+        
+        // s용 패턴 생성
+        let sPattern = null;
+        function generateSPattern() {
+            const variations = [];
+            for (let i = 0; i < 10; i++) {
+                variations.push({
+                    x: Math.floor((Math.random() - 0.5) * 2), // 픽셀 단위 (s용)
+                    y: Math.floor((Math.random() - 0.5) * 2)  // 픽셀 단위 (s용)
+                });
+            }
+            return variations;
+        }
+        
+        // 숫자 그리기
+        function drawScore() {
+            ctx.font = 'bold 80px monospace';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            
+            const text = score.toString();
+            const baseY = 20;
+            
+            ctx.fillStyle = '#7a7a7a'; // 사각형과 같은 색
+            
+            // 숫자를 각 자리수별로 나누어 그리기
+            const digitSpacing = 15; // 각 자리수 간의 간격
+            
+            // 각 자리수의 실제 너비 측정
+            let totalWidth = 0;
+            const digitWidths = [];
+            for (let i = 0; i < text.length; i++) {
+                const digitWidth = ctx.measureText(text[i]).width;
+                digitWidths.push(digitWidth);
+                totalWidth += digitWidth;
+                if (i < text.length - 1) {
+                    totalWidth += digitSpacing;
+                }
+            }
+            
+            const baseX = (canvas.width - totalWidth) / 2; // 정확한 중앙 정렬
+            
+            let currentX = baseX;
+            
+            for (let i = 0; i < text.length; i++) {
+                const digit = text[i];
+                const x = currentX;
+                currentX += digitWidths[i] + digitSpacing;
+                
+                // 글씨를 두껍게 만들기 위해 여러 번 그리기
+                const thicknessOffsets = [
+                    [-2, -2], [-2, 0], [-2, 2],
+                    [0, -2], [0, 0], [0, 2],
+                    [2, -2], [2, 0], [2, 2]
+                ];
+                
+                thicknessOffsets.forEach(thick => {
+                    // 울퉁불퉁한 효과: 여러 번 그리기
+                    if (scorePattern) {
+                        scorePattern.forEach(pattern => {
+                            ctx.fillText(digit, x + thick[0] + pattern.x, baseY + thick[1] + pattern.y);
+                        });
+                    } else {
+                        ctx.fillText(digit, x + thick[0], baseY + thick[1]);
+                    }
+                });
+            }
+            
+            // 작은 's' 추가
+            const sFontSize = 30;
+            ctx.font = `bold ${sFontSize}px monospace`;
+            const sX = currentX - digitSpacing + 10; // 숫자와 더 떨어트리기
+            const sY = baseY + 50; // 아래쪽으로 이동
+            
+            // 's'는 얇게 그리기 (울퉁불퉁 패턴 2)
+            if (sPattern) {
+                sPattern.forEach(pattern => {
+                    ctx.fillText('s', sX + pattern.x, sY + pattern.y);
+                });
+            } else {
+                ctx.fillText('s', sX, sY);
+            }
+        }
+        
+        // 캐릭터 이동
+        function movePlayer(dx, dy) {
+            if (isAnimating) return; // 애니메이션 중이면 무시
+            
+            const newRow = playerRow + dy;
+            const newCol = playerCol + dx;
+            
+            // 맵 경계 체크
+            if (newRow >= 0 && newRow < 7 && newCol >= 0 && newCol < 7) {
+                // 고블린과 겹치는지 체크
+                for (const goblin of goblins) {
+                    if (goblin.health > 0) {
+                        // 실제 위치 체크
+                        if (newRow === goblin.row && newCol === goblin.col) {
+                            return; // 고블린과 겹침
+                        }
+                        
+                        // 애니메이션 중이면 시작 위치와 끝 위치 모두 체크
+                        if (goblin.isAnimating) {
+                            if ((newRow === goblin.animStartRow && newCol === goblin.animStartCol) ||
+                                (newRow === goblin.animEndRow && newCol === goblin.animEndCol)) {
+                                return; // 애니메이션 시작/끝 위치와 겹침
+                            }
+                        }
+                    }
+                }
+                
+                // 처음 움직일 때 점수 카운트 시작
+                if (!hasStartedMoving) {
+                    hasStartedMoving = true;
+                    lastScoreTime = Date.now();
+                }
+                
+                // 애니메이션 시작
+                isAnimating = true;
+                animProgress = 0;
+                animStartRow = playerRow;
+                animStartCol = playerCol;
+                
+                // 실제 위치는 즉시 업데이트
+                playerRow = newRow;
+                playerCol = newCol;
+                
+                animEndRow = newRow;
+                animEndCol = newCol;
+            }
+        }
+        
+        // 키보드 입력 처리
+        let keys = {};
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            // 이동 처리
+            if (keys['w'] || keys['arrowup']) {
+                movePlayer(0, -1);
+            }
+            if (keys['s'] || keys['arrowdown']) {
+                movePlayer(0, 1);
+            }
+            if (keys['a'] || keys['arrowleft']) {
+                movePlayer(-1, 0);
+            }
+            if (keys['d'] || keys['arrowright']) {
+                movePlayer(1, 0);
+            }
+            
+            // 키 반복 방지
+            keys = {};
+        });
+        
+        // 마우스 위치 추적
+        window.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+        
+        // 마우스 클릭 공격
+        window.addEventListener('mousedown', (e) => {
+            if (e.button === 0) { // 왼쪽 클릭
+                const currentTime = Date.now();
+                
+                // 1초에 한 번만 공격 가능
+                if (currentTime - lastPlayerAttackTime < 1000) {
+                    return;
+                }
+                
+                lastPlayerAttackTime = currentTime;
+                
+                // 공격 애니메이션 시작
+                playerAttackAnim = { progress: 0, startTime: currentTime };
+                
+                // X가 있는 칸의 적에게 데미지
+                // savedXPos를 world 좌표로 변환
+                const gridSize = 7;
+                const cellSize = 75;
+                const spacing = 12.5;
+                const totalSize = gridSize * cellSize + (gridSize - 1) * spacing;
+                const startX = (canvas.width - totalSize) / 2;
+                const startY = (canvas.height - totalSize) / 2;
+                
+                const centerX = startX + playerCol * (cellSize + spacing) + cellSize / 2;
+                const centerY = startY + playerRow * (cellSize + spacing) + cellSize / 2;
+                
+                const dx = mouseX - centerX;
+                const dy = mouseY - centerY;
+                let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+                if (angle < 0) angle += 360;
+                
+                let direction;
+                if (angle >= 315 || angle < 45) {
+                    direction = 90;
+                } else if (angle >= 45 && angle < 135) {
+                    direction = 180;
+                } else if (angle >= 135 && angle < 225) {
+                    direction = 270;
+                } else {
+                    direction = 0;
+                }
+                
+                const rad = direction * Math.PI / 180;
+                const localX = savedXPos.x;
+                const localY = savedXPos.y;
+                const worldX = centerX + localX * Math.cos(rad) - localY * Math.sin(rad);
+                const worldY = centerY + localX * Math.sin(rad) + localY * Math.cos(rad);
+                
+                const targetCol = Math.round((worldX - startX) / (cellSize + spacing));
+                const targetRow = Math.round((worldY - startY) / (cellSize + spacing));
+                
+                // 고블린들 중 공격 대상 칸에 있는 것에게 데미지
+                for (const goblin of goblins) {
+                    if (goblin.health > 0 && targetRow === goblin.row && targetCol === goblin.col) {
+                        goblin.takeDamage(1);
+                        break; // 한 번에 하나만 공격
+                    }
+                }
+            }
+        });
+
+        // 게임 루프
+        function gameLoop() {
+            let currentTime = Date.now();
+            
+            // 스폰 간격 조정 (50초마다 0.5초씩 줄이기, 최소 1초)
+            const elapsedSeconds = (currentTime - gameStartTime) / 1000;
+            const reductionCount = Math.floor(elapsedSeconds / 50);
+            goblinSpawnInterval = Math.max(1000, 10000 - reductionCount * 500);
+            
+            // 고블린 스폰
+            const timeSinceStart = currentTime - gameStartTime;
+            
+            // 첫 5초 이후부터 스폰 가능
+            if (timeSinceStart >= 5000) {
+                // 첫 스폰이거나 정기 스폰 시간인지 확인
+                if (goblins.length === 0 || currentTime - lastGoblinSpawnTime >= goblinSpawnInterval) {
+                    spawnGoblin();
+                    lastGoblinSpawnTime = currentTime;
+                }
+            }
+            
+            // 점수 1초마다 증가 (움직이기 시작한 후에만)
+            if (hasStartedMoving) {
+                currentTime = Date.now();
+                if (currentTime - lastScoreTime >= 1000) {
+                    score++;
+                    lastScoreTime = currentTime;
+                }
+            }
+            
+            // 애니메이션 업데이트 (0.2초 고정)
+            if (isAnimating) {
+                const animSpeed = 1 / (60 * 0.2); // 60fps에서 0.2초
+                animProgress += animSpeed;
+                if (animProgress >= 1) {
+                    animProgress = 1;
+                    isAnimating = false;
+                }
+            }
+            
+            // 배경을 어두운 회색으로 채우기
+            ctx.fillStyle = '#5a5a5a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 7x7 그리드 그리기
+            drawGrid();
+            
+            // 캐릭터 그리기
+            drawPlayer();
+            
+            // 고블린 업데이트 및 데미지 처리
+            currentTime = Date.now();
+            for (let i = goblins.length - 1; i >= 0; i--) {
+                const goblin = goblins[i];
+                const distance = goblin.distanceToPlayer();
+                
+                // 8칸 범위 체크 (맨하탄 거리 1)
+                if (distance <= 1) {
+                    // 범위 안에 들어옴
+                    if (!goblin.isInRange) {
+                        goblin.isInRange = true;
+                        goblin.lastEnteredRangeTime = currentTime;
+                    }
+                    
+                    // 공격/애니메이션 중이 아닐 때만 타이머 진행
+                    if (!goblin.isAttacking && !goblin.isAnimating) {
+                        // 범위 안에 들어온 후 1.5초가 지났으면 공격 (고블린이 살아있을 때만)
+                        if (goblin.health > 0 && currentTime - goblin.lastEnteredRangeTime >= 1500) {
+                            goblin.startAttack();
+                            
+                            // 체력바 쪼개지는 애니메이션 시작 (감소 전 체력 인덱스)
+                            if (playerHealth > 0) {
+                                healthBreakingAnim = { 
+                                    index: playerHealth - 1, // 감소하기 전의 마지막 체력 바
+                                    progress: 0 
+                                };
+                            }
+                            
+                            playerHealth -= 1;
+                            playerIsHit = true;
+                            playerHitStartTime = Date.now();
+                            lastDamageTime = currentTime;
+                            // 다음 공격을 위해 시간 리셋
+                            goblin.lastEnteredRangeTime = currentTime;
+                        }
+                    } else {
+                        // 공격 중일 때는 타이머를 멈춤 (lastEnteredRangeTime을 업데이트하지 않음)
+                    }
+                } else {
+                    // 범위 밖으로 나감
+                    goblin.isInRange = false;
+                    goblin.lastEnteredRangeTime = 0;
+                }
+                
+                // 고블린이 살아있으면 업데이트
+                if (goblin.health > 0) {
+                    goblin.update();
+                    drawGoblin(goblin);
+                } else {
+                    drawGoblin(goblin); // 체력이 0이어도 잠시 그려줄 수 있음
+                    // 죽은 고블린 제거
+                    goblins.splice(i, 1);
+                }
+            }
+            
+            // 체력 바 그리기
+            drawHealthBar();
+            
+            // 체력바 쪼개지는 애니메이션 업데이트
+            if (healthBreakingAnim) {
+                const animSpeed = 1 / (60 * 0.3); // 0.3초 동안 애니메이션
+                healthBreakingAnim.progress += animSpeed;
+                if (healthBreakingAnim.progress >= 1) {
+                    healthBreakingAnim = null; // 애니메이션 종료
+                }
+            }
+            
+            // 플레이어 공격 애니메이션 업데이트
+            if (playerAttackAnim) {
+                const animSpeed = 1 / (60 * 1.0); // 1초 동안 애니메이션
+                playerAttackAnim.progress += animSpeed;
+                if (playerAttackAnim.progress >= 1) {
+                    playerAttackAnim = null; // 애니메이션 종료
+                }
+            }
+            
+            // 플레이어 피격 효과 업데이트
+            if (playerIsHit) {
+                const currentTime = Date.now();
+                const hitDuration = 150; // 0.15초
+                const elapsed = currentTime - playerHitStartTime;
+                
+                if (elapsed < hitDuration) {
+                    const shakeAmount = 3;
+                    playerHitOffset.x = (Math.random() - 0.5) * shakeAmount;
+                    playerHitOffset.y = (Math.random() - 0.5) * shakeAmount;
+                } else {
+                    playerIsHit = false;
+                    playerHitOffset.x = 0;
+                    playerHitOffset.y = 0;
+                }
+            }
+            
+            // 숫자 그리기
+            drawScore();
+
+            // 픽셀 생성
+            createPixel();
+
+            // 픽셀 업데이트 및 그리기
+            for (let i = pixels.length - 1; i >= 0; i--) {
+                pixels[i].update();
+                pixels[i].draw();
+                
+                // 화면 밖으로 나간 픽셀 제거
+                if (pixels[i].isOffScreen()) {
+                    pixels.splice(i, 1);
+                }
+            }
+            
+            // 고블린 파티클 업데이트 및 그리기
+            for (let i = goblinParticles.length - 1; i >= 0; i--) {
+                goblinParticles[i].update();
+                goblinParticles[i].draw();
+                
+                // 화면 밖으로 나간 파티클 제거
+                if (goblinParticles[i].isOffScreen()) {
+                    goblinParticles.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // 그리드 패턴 생성
+        generateGridPatterns();
+        
+        // 캐릭터 패턴 생성
+        playerPath = generatePlayerPattern();
+        
+        // 숫자 패턴 생성
+        scorePattern = generateScorePattern();
+        
+        // s 패턴 생성
+        sPattern = generateSPattern();
+        
+        // 고블린 패턴 생성
+        goblinPath = generateGoblinPattern();
+        
+        // 게임 시작
+        gameLoop();
+    </script>
+</body>
+</html>
+
+
 
