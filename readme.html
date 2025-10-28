@@ -71,7 +71,7 @@
         let lastDamageTime = Date.now();
         let lastGoblinSpawnTime = Date.now();
         let goblinSpawnInterval = 10000; // 스폰 간격 (초기 10초)
-        let gameStartTime = Date.now(); // 게임 시작 시간
+        let gameStartTime = null; // 게임 시작 시간 (움직이기 시작할 때 설정)
         
         // 체력 바 쪼개지는 애니메이션
         let healthBreakingAnim = null; // { index: 체력바 인덱스, progress: 0~1 }
@@ -1101,6 +1101,7 @@
                 // 처음 움직일 때 점수 카운트 시작
                 if (!hasStartedMoving) {
                     hasStartedMoving = true;
+                    gameStartTime = Date.now(); // 게임 시작 시간 설정
                     lastScoreTime = Date.now();
                 }
                 
@@ -1215,19 +1216,23 @@
             let currentTime = Date.now();
             
             // 스폰 간격 조정 (50초마다 0.5초씩 줄이기, 최소 1초)
-            const elapsedSeconds = (currentTime - gameStartTime) / 1000;
-            const reductionCount = Math.floor(elapsedSeconds / 50);
-            goblinSpawnInterval = Math.max(1000, 10000 - reductionCount * 500);
+            if (gameStartTime) {
+                const elapsedSeconds = (currentTime - gameStartTime) / 1000;
+                const reductionCount = Math.floor(elapsedSeconds / 50);
+                goblinSpawnInterval = Math.max(1000, 10000 - reductionCount * 500);
+            }
             
-            // 고블린 스폰
-            const timeSinceStart = currentTime - gameStartTime;
-            
-            // 첫 5초 이후부터 스폰 가능
-            if (timeSinceStart >= 5000) {
-                // 첫 스폰이거나 정기 스폰 시간인지 확인
-                if (goblins.length === 0 || currentTime - lastGoblinSpawnTime >= goblinSpawnInterval) {
-                    spawnGoblin();
-                    lastGoblinSpawnTime = currentTime;
+            // 고블린 스폰 (움직이기 시작한 후에만)
+            if (hasStartedMoving) {
+                const timeSinceStart = currentTime - gameStartTime;
+                
+                // 첫 5초 이후부터 스폰 가능
+                if (timeSinceStart >= 5000) {
+                    // 첫 스폰이거나 정기 스폰 시간인지 확인
+                    if (goblins.length === 0 || currentTime - lastGoblinSpawnTime >= goblinSpawnInterval) {
+                        spawnGoblin();
+                        lastGoblinSpawnTime = currentTime;
+                    }
                 }
             }
             
@@ -1404,6 +1409,5 @@
     </script>
 </body>
 </html>
-
 
 
